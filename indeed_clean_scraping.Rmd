@@ -1,0 +1,342 @@
+---
+title: "indeed_clean_scraping"
+author: "Samy Soualem"
+date: "March 25, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Loading raw csv
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(quanteda)
+
+DATA_DIR <- "data"
+BASE_FNAME <- "indeed_companies_data_20170324-221651"
+NB_FILE <- 6
+
+fname <- character(NB_FILE)
+l_df_raw <- vector("list", NB_FILE) 
+for (i in 1:NB_FILE) {
+  fname[i] <- file.path(DATA_DIR, paste0(BASE_FNAME, "_", i-1, ".csv"))
+  l_df_raw[[i]] <- read.csv2(fname[i], stringsAsFactors = FALSE)
+}
+
+
+# Combine and remove duplicates (based on job link)
+df_raw <- bind_rows(l_df_raw) %>% 
+    group_by(job_link) %>%
+    slice(1L) %>%
+    # ungroupo and group_by after because of dyplr bug : https://github.com/hadley/dplyr/issues/1341
+    ungroup %>% 
+    group_by(job_link)
+
+```
+
+
+## Remove known temp agencies
+```{r}
+v_temp_comp <- c("adecco", "manpower", "temporaire")
+
+df_raw_no_temp <- df_raw
+for (temp_comp in v_temp_comp) {
+  pattern <- paste0(".*", temp_comp, ".*")
+  df_raw_no_temp <- df_raw_no_temp %>%
+    filter(!grepl(pattern, comp_name, ignore.case = TRUE))
+}
+
+# To always be able to use df_clean for next steps
+df_clean <- df_raw_no_temp
+```
+
+
+
+## Bar plot of companies that hire the most for in the dataset
+```{r}
+
+# Not a real company
+ignore_pattern <- "^data recrutement.*"
+
+# Count number of listings by company (and ignore wrong company names)
+max_plot_nb <- 25
+comp_cnt <- df_clean %>%
+  filter(!grepl(ignore_pattern, comp_name, ignore.case = TRUE)) %>%
+  count(comp_name) %>%
+  arrange(desc(n)) %>%
+  head(max_plot_nb)
+
+ggplot(comp_cnt, aes(x = reorder(comp_name, -n), y = n)) +
+geom_bar(stat="identity", fill = "deepskyblue4") +
+ggtitle("Companies that hire the most for data analytics jobs") +
+xlab("Company") + ylab("Number of listings") +
+theme(axis.text.x=element_text(angle=45, hjust=1))
+
+
+```
+
+
+
+## Check most common job titles
+```{r}
+# Count number of listings by raw job title
+max_plot_nb <- 25
+job_title_cnt <- df_clean %>%
+  count(job_title) %>%
+  arrange(desc(n)) %>%
+  head(max_plot_nb)
+
+ggplot(job_title_cnt, aes(x = reorder(job_title, -n), y = n)) +
+geom_bar(stat="identity", fill = "deepskyblue4") +
+ggtitle("Most common job titles") +
+xlab("Raw job title") + ylab("Number of listings") +
+theme(axis.text.x=element_text(angle=45, hjust=1))
+
+```
+
+## Create cleaned / merged job titles (simple version)
+```{r}
+
+merge_job_titles <- function(df) {
+  df_out <- df
+  df_out$merged_job_title <- as.character(NA)
+
+
+  # Order of pattern is important : the first pattern found will decide the final merged_job_title
+  #job_map <- data.frame(pattern = "data\\s+scientist", merged_job_title = "data scientist", stringsAsFactors = FALSE)
+  job_map <- data.frame(pattern = "chef.*projet", merged_job_title = "Chef de projet", stringsAsFactors = FALSE)
+  job_map <- rbind(job_map, c("project.*manager", "Chef de projet"))
+  job_map <- rbind(job_map, c("manager", "Manager"))
+  
+  job_map <- rbind(job_map, c("(stage|stagia)", "Stagiaire"))
+  job_map <- rbind(job_map, c("(intern|internship)", "Stagiaire"))
+  job_map <- rbind(job_map, c("apprenti", "Apprenti"))
+  
+  
+  job_map <- rbind(job_map, c("data(\\s+|-)?scientist", "Data scientist"))
+  job_map <- rbind(job_map, c("data\\s+analyste?", "Data analyst"))
+  job_map <- rbind(job_map, c("analyste?\\s+data", "Data analyst"))
+  job_map <- rbind(job_map, c("business\\s+analyste?", "Business analyst"))
+  job_map <- rbind(job_map, c("(bi|business intelligence)\\s+analyst", "Analyste BI"))
+  job_map <- rbind(job_map, c("analyste?\\s+(bi|business intelligence)", "Analyste BI"))
+  
+  job_map <- rbind(job_map, c("statisticien", "Statisticien"))
+  job_map <- rbind(job_map, c("statistique", "Statisticien"))
+  
+  
+  job_map <- rbind(job_map, c("machine\\s+learning", "Machine learning (divers)"))
+  
+  job_map <- rbind(job_map, c("(data\\s?mining|data\\s?miner)", "Dataminer"))
+  
+  job_map <- rbind(job_map, c("architect", "Architecte"))
+  
+  job_map <- rbind(job_map, c("analyst", "Analyste (divers)"))
+  job_map <- rbind(job_map, c("developer", "Développeur (divers)"))
+  job_map <- rbind(job_map, c("(development|d(é|e)veloppement)", "Développeur (divers)"))
+  job_map <- rbind(job_map, c("d(é|e)veloppeur", "Développeur (divers)"))
+  job_map <- rbind(job_map, c("software\\s+engineer", "Développeur (divers)"))
+  job_map <- rbind(job_map, c("(chercheur|researcher|recherche)", "Chercheur (divers)"))
+  job_map <- rbind(job_map, c("consultant", "Consultant (divers)"))
+  job_map <- rbind(job_map, c("assistant", "Assistant (divers)"))
+  job_map <- rbind(job_map, c("specialist", "Spécialiste (divers)"))
+  job_map <- rbind(job_map, c("responsable", "Responsable (divers)"))
+  job_map <- rbind(job_map, c("chief.*officer", "CXO (divers)"))
+  job_map <- rbind(job_map, c("chargé\\s+études", "Chargé d'études (divers)"))
+  job_map <- rbind(job_map, c("data\\s+science", "Data science (divers)"))
+  job_map <- rbind(job_map, c("big\\s+data", "Big data (divers)"))
+  
+
+  # Create simplified job titles 
+  for (i in 1:nrow(job_map)) {
+    curr_pattern <- job_map[i, ]$pattern
+    curr_m_job_title <- job_map[i, ]$merged_job_title
+    
+    df_out <- df_out %>%
+      mutate(merged_job_title = ifelse(is.na(merged_job_title)
+                                     & grepl(curr_pattern, job_title, ignore.case = TRUE)
+           , curr_m_job_title, merged_job_title))
+  }
+  # For merged job titles that are still NA : use the original job title
+  df_out <- df_out %>%
+    mutate(merged_job_title = ifelse(is.na(merged_job_title)
+           , job_title, merged_job_title))
+  
+  
+  df_out
+}
+
+
+
+df_clean_merged <- merge_job_titles(df_clean)
+
+# To always be able to use df_clean for next steps
+df_clean <- df_clean_merged
+
+```
+
+## Bar plot of most frequent clean job titles
+```{r}
+# Count number of listings by merged job title
+max_plot_nb <- 15
+m_job_title_cnt <- df_clean_merged %>%
+  count(merged_job_title) %>%
+  arrange(desc(n)) %>%
+  head(max_plot_nb)
+
+ggplot(m_job_title_cnt, aes(x = reorder(merged_job_title, -n), y = n)) +
+  geom_bar(stat="identity", fill = "deepskyblue4") +
+  ggtitle("Most common simplified job titles") +
+  xlab("Simplified job title") + ylab("Number of listings") +
+  theme(axis.text.x=element_text(angle=45, hjust=1))
+
+```
+
+## Get token count from a predefined list of skills
+```{r}
+
+
+
+# Note : skills like "business objects" or "machine learning" can only be matched if they are pre-processed
+# because only 1-grams are kept in the tokenization process
+# Multiple keywords separator : "#"
+
+pretoken_job_descr <- tolower(df_clean$job_descr)
+pretoken_job_descr <- gsub("machine\\s+learning", " machine#learning ", pretoken_job_descr, ignore.case = TRUE)
+pretoken_job_descr <- gsub("business\\s+objects?", " business#objects ", pretoken_job_descr, ignore.case = TRUE)
+pretoken_job_descr <- gsub("ab(\\s+)?initio", " ab#initio ", pretoken_job_descr, ignore.case = TRUE)
+pretoken_job_descr <- gsub("power(\\s+)?bi", " power#bi ", pretoken_job_descr, ignore.case = TRUE)
+pretoken_job_descr <- gsub("data\\s+viz", " dataviz ", pretoken_job_descr, ignore.case = TRUE)
+pretoken_job_descr <- gsub("data\\s+vis", " dataviz ", pretoken_job_descr, ignore.case = TRUE)
+pretoken_job_descr <- gsub("visualisation", " dataviz ", pretoken_job_descr, ignore.case = TRUE)
+pretoken_job_descr <- gsub("visualization", " dataviz ", pretoken_job_descr, ignore.case = TRUE)
+  
+
+
+
+skill_tokens <- tokenize(pretoken_job_descr, what = "word"
+                   , removeNumbers = TRUE, removePunct = TRUE, removeSymbols = TRUE
+                   , removeTwitter = FALSE, removeHyphens = TRUE, removeURL = TRUE)
+
+# TODO : keep in csv file instead
+SKILL_LIST <- c(
+  # Programming
+  "java"
+  , "python"
+  , "matlab"
+  , "scala"
+  , "julia"
+  , "perl"
+  , "ruby"
+  , "c++"
+  , "javascript"
+  
+  # analysis tools
+  , "excel"
+  , "r"
+  , "sas"
+  , "spss"
+  , "d3"
+  
+  # big data
+  , "hadoop"
+  , "mapreduce"
+  , "spark"
+  , "pig"
+  , "hive"
+  , "shark"
+  , "oozie"
+  , "zookeeper"
+  , "flume"
+  , "mahout"
+  
+  # DB
+  , "sql"
+  , "nosql"
+  , "hbase"
+  , "cassandra"
+  , "mongodb"
+  , "teradata"
+  , "oracle"
+  
+  # Viz / reporting
+  , "tableau"
+  , "qlikview"
+  , "qliksense"
+  , "power#bi"
+  , "cognos"
+  , "spotfire"
+  , "microstrategy"
+  , "business#objects"
+  , "pentaho"
+  , "sap"
+  
+  # ETL
+  , "elta"
+  , "talend"
+  , "informatica"
+  , "datastage"
+  , "ab#initio"
+  , "odi"
+  , "ssis"
+  , "snaplogic"
+  
+  # Misc
+  , "statisti.*"
+  , "machine#learning"
+  , "mooc"
+  , "coursera"
+  , "edx"
+  , "udacity"
+  , "kaggle"
+)
+
+dfm_skill <- dfm(skill_tokens, keptFeatures = SKILL_LIST)
+
+# Count each feature only one by job listing
+dfm_skill_1_cnt <- ifelse(as.matrix(dfm_skill) > 0, 1, 0)
+dfm_skill_1_cnt <- as.data.frame(dfm_skill_1_cnt)
+  
+#dt_dfm_skill <- data.frame(ngram = features(dfm_skill), count = colSums(dfm_skill), key = "ngram")
+dt_dfm_skill <- data.frame(ngram = colnames(dfm_skill_1_cnt), count = colSums(dfm_skill_1_cnt), key = "ngram")
+
+
+```
+
+## Plot most popular skills
+```{r}
+max_ngram <- 25
+ngram_skill_plot <- dt_dfm_skill %>%
+  arrange(desc(count)) %>%
+  head(max_ngram)
+
+
+ggplot(ngram_skill_plot, aes(x = reorder(ngram, -count), max_ngram, y = count)) +
+  geom_bar(stat="identity", fill = "deepskyblue4") +
+  ggtitle("Most popular skills") +
+  #xlab("Simplified job title") + ylab("Number of listings") +
+  theme(axis.text.x=element_text(angle=45, hjust=1))
+```
+
+
+## TODO : link keyword list to job listing
+```{r}
+
+# TODO : for each row, get var names where value > 0
+
+
+
+```
+
+
+
+## Basic recommender ? (do in another RMD with separate functions)
+```{r}
+#https://6chaoran.wordpress.com/2015/09/14/job-hunting-like-a-data-analyst-part-iii-a-simple-recommender/
+```
+
+
+
