@@ -17,6 +17,7 @@ library(ggplot2)
 library(quanteda)
 
 DATA_DIR <- "data"
+CLEAN_DIR <- "clean_data"
 BASE_FNAME <- "indeed_companies_data_20170324-221651"
 NB_FILE <- 6
 
@@ -36,7 +37,25 @@ df_raw <- bind_rows(l_df_raw) %>%
     ungroup %>% 
     group_by(job_link)
 
+
 ```
+
+## Remove NA columns
+```{r}
+# Check missing values
+sapply(df_raw, function(x) sum(is.na(x)))
+
+
+  
+# Remove columns with only missing values
+df_raw$benefit_rating <- NULL
+df_raw$culture_rating <- NULL
+df_raw$jsecurity_rating <- NULL
+df_raw$mgmt_rating <- NULL
+df_raw$overall_rating <- NULL
+df_raw$bwl_bal_rating_rating <- NULL
+```
+
 
 
 ## Remove known temp agencies
@@ -326,11 +345,43 @@ ggplot(ngram_skill_plot, aes(x = reorder(ngram, -count), max_ngram, y = count)) 
 ```{r}
 
 # TODO : for each row, get var names where value > 0
+head(dfm_skill_1_cnt)
 
+
+
+skill_list_by_job <- character(nrow(dfm_skill_1_cnt))
+
+# For each feature that exists in a job listing, add feature to skill list
+for(col_nm in names(dfm_skill_1_cnt)){
+  skill_list_by_job <- ifelse(dfm_skill_1_cnt[[col_nm]] > 0
+                              , paste(skill_list_by_job, col_nm, sep = ",")
+                              , skill_list_by_job)
+}
+
+# Remove beginning separator
+skill_list_by_job <- gsub("^,", "", skill_list_by_job)
+
+
+# Add to DF
+df_clean$skill_list <- skill_list_by_job
 
 
 ```
 
+
+## Export final csv
+```{r}
+
+if(!dir.exists(CLEAN_DIR)) {
+  dir.create(CLEAN_DIR)
+}
+
+f <- "indeed_clean_data"
+f_ts <- file.path(CLEAN_DIR, paste(f, "_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep=""))
+
+write.csv2(df_clean, f_ts, row.names = FALSE)
+
+```
 
 
 ## Basic recommender ? (do in another RMD with separate functions)
